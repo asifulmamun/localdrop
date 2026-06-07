@@ -5,6 +5,7 @@ import signalingPlugin from './vite-signaling-plugin.js'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), signalingPlugin()],
+  base: './',
 })
 
 
