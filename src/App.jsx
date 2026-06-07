@@ -28,7 +28,7 @@ export default function App() {
       <nav className="navbar">
         <div className="navbar-brand">
           {Icons.logo}
-          <span>FileDrop</span>
+          <span>LocalDrop</span>
         </div>
         <div className="navbar-right">
           <span>Your ID</span>
@@ -82,9 +82,14 @@ export default function App() {
             {peerCount} peer{peerCount !== 1 ? 's' : ''} nearby — click to send
           </span>
         ) : (
-          <span>Looking for local peers…</span>
+          <span className="scanning">Looking for local peers…</span>
         )}
       </div>
+
+      {/* ── Credit Footer ──────────────────── */}
+      <footer className="credit-footer">
+        Built by <a href="https://asifulmamun.info.bd" target="_blank" rel="noopener noreferrer">asifulmamun.info.bd</a>
+      </footer>
 
       {/* ── Modals & Toasts ─────────────────── */}
       {selectedPeer && (

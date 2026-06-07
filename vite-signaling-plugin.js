@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws';
  */
 export default function signalingPlugin() {
   return {
-    name: 'filedrop-signaling',
+    name: 'localdrop-signaling',
     configureServer(server) {
       const wss = new WebSocketServer({ noServer: true });
       const clients = new Map(); // id → ws
@@ -71,7 +71,7 @@ export default function signalingPlugin() {
         });
       });
 
-      console.log('  ➜  FileDrop signaling relay active on /signaling');
+      console.log('  ➜  LocalDrop signaling relay active on /signaling');
     },
   };
 }
