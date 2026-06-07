@@ -33,9 +33,10 @@ export default function App() {
     localStorage.setItem('localdrop-theme', dark ? 'dark' : 'light');
   }, [dark]);
 
-  const handleSendFile = (file) => {
-    if (selectedPeer) rtc.sendFile(selectedPeer.id, file);
+  const handleSendFile = (files) => {
+    if (selectedPeer) rtc.sendFiles(selectedPeer.id, files);
   };
+
 
   const handleSaveId = () => {
     setIsEditing(false);
@@ -146,10 +147,11 @@ export default function App() {
 
       {/* ── Credit Footer ──────────────────── */}
       <footer className="credit-footer">
-        <a href="https://asifulmamun.info.bd" target="_blank" rel="noopener noreferrer">
-          Latest: asifulmamun.info.bd
+        <a href="https://asifulmamun.info.bd/cv" target="_blank" rel="noopener noreferrer">
+          Latest: asifulmamun.info.bd/cv (Docs)
         </a>
       </footer>
+
 
       {/* ── Modals & Toasts ─────────────────── */}
       {selectedPeer && (

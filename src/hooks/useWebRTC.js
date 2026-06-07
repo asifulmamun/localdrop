@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-const CHUNK_SIZE = 16384; // 16KB
+const CHUNK_SIZE = 65536; // 64KB
 
 export default function useWebRTC(onConnectionOpen) {
   const [myId, setMyId] = useState(() => {
@@ -26,9 +26,12 @@ export default function useWebRTC(onConnectionOpen) {
   const wsRef = useRef(null);
   const peerConns = useRef(new Map());   // peerId → RTCPeerConnection
   const dataChans = useRef(new Map());   // peerId → RTCDataChannel
-  const recvState = useRef(new Map());   // peerId → { chunks, size, meta }
-  const pendingSend = useRef(new Map()); // peerId → File
-  const activeSendPeer = useRef(null);
+
+  // File Transfer Queue & States
+  const sendQueueRef = useRef([]);       // Queue of { id, file, peerId }
+  const activeSendFile = useRef(null);    // Active sending item
+  const activeRecvFile = useRef(null);    // Active receiving state: { id, name, size, mimeType, chunks, receivedBytes }
+  const sessionAcceptedRef = useRef(false); // Auto-accept flag for multi-file transfers in same session
 
   const addPeerToRadar = useCallback((id) => {
     const angle = Math.random() * 2 * Math.PI;
@@ -50,49 +53,97 @@ export default function useWebRTC(onConnectionOpen) {
       peerConns.current.delete(peerId);
     }
     dataChans.current.delete(peerId);
-    recvState.current.delete(peerId);
-    pendingSend.current.delete(peerId);
     removePeerFromRadar(peerId);
   }, [removePeerFromRadar]);
 
-  /* ── Send file binary data over DataChannel ── */
-  const sendFileData = useCallback((peerId, file) => {
+  /* ── Send file binary data over DataChannel with backpressure flow control ── */
+  const sendFileChunks = useCallback(async (peerId, file, fileId) => {
     const channel = dataChans.current.get(peerId);
     if (!channel || channel.readyState !== 'open') return;
 
-    channel.send(JSON.stringify({
-      type: 'file-meta', name: file.name, size: file.size,
-      mime: file.type || 'application/octet-stream',
-    }));
+    channel.bufferedAmountLowThreshold = 262144; // 256KB
+
+    const waitForBuffer = () => {
+      return new Promise((resolve) => {
+        channel.onbufferedamountlow = () => {
+          channel.onbufferedamountlow = null;
+          resolve();
+        };
+      });
+    };
 
     let offset = 0;
+    const totalSize = file.size;
     const reader = new FileReader();
 
-    reader.onload = (e) => {
-      channel.send(e.target.result);
-      offset += e.target.result.byteLength;
-      const percent = Math.round((offset / file.size) * 100);
-      setSendProgress({ percent, sent: offset, total: file.size });
-
-      if (offset < file.size) {
-        if (channel.bufferedAmount > CHUNK_SIZE * 8) {
-          setTimeout(readSlice, 50);
-        } else {
-          readSlice();
-        }
-      } else {
-        setSendProgress({ percent: 100, sent: file.size, total: file.size, done: true });
-        pendingSend.current.delete(peerId);
+    while (offset < totalSize) {
+      // Backpressure safety check (1MB threshold)
+      if (channel.bufferedAmount > 1048576) {
+        await waitForBuffer();
       }
-    };
 
-    const readSlice = () => {
-      const slice = file.slice(offset, offset + CHUNK_SIZE);
-      reader.readAsArrayBuffer(slice);
-    };
+      // Check if channel is still open
+      if (channel.readyState !== 'open') {
+        throw new Error('Data channel closed during transfer');
+      }
 
-    setSendProgress({ percent: 0, sent: 0, total: file.size });
-    readSlice();
+      const chunk = file.slice(offset, offset + CHUNK_SIZE);
+      const chunkData = await new Promise((resolve, reject) => {
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(e.target.error);
+        reader.readAsArrayBuffer(chunk);
+      });
+
+      channel.send(chunkData);
+      offset += chunkData.byteLength;
+
+      const percent = Math.round((offset / totalSize) * 100);
+      setSendProgress({
+        fileId,
+        name: file.name,
+        percent,
+        sent: offset,
+        total: totalSize,
+      });
+    }
+  }, []);
+
+  /* ── Process next file in the send queue ── */
+  const processNextSendQueueItem = useCallback(() => {
+    if (sendQueueRef.current.length === 0) {
+      activeSendFile.current = null;
+      setSendProgress(null);
+      return;
+    }
+
+    const nextItem = sendQueueRef.current[0];
+    activeSendFile.current = nextItem;
+
+    const { id, file, peerId } = nextItem;
+    const channel = dataChans.current.get(peerId);
+    if (!channel || channel.readyState !== 'open') {
+      sendQueueRef.current = [];
+      activeSendFile.current = null;
+      setSendProgress(null);
+      return;
+    }
+
+    setSendProgress({
+      fileId: id,
+      name: file.name,
+      percent: 0,
+      sent: 0,
+      total: file.size,
+      waiting: true,
+    });
+
+    channel.send(JSON.stringify({
+      type: 'file-start',
+      id,
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || 'application/octet-stream',
+    }));
   }, []);
 
   /* ── Data Channel message handler ─────────── */
@@ -100,52 +151,102 @@ export default function useWebRTC(onConnectionOpen) {
     if (typeof e.data === 'string') {
       const msg = JSON.parse(e.data);
 
-      if (msg.type === 'file-offer') {
-        setIncomingFile({ peerId, name: msg.name, size: msg.size, mime: msg.mime });
+      if (msg.type === 'file-start') {
+        const fileInfo = { id: msg.id, peerId, name: msg.name, size: msg.size, mimeType: msg.mimeType };
+        // If session was already accepted, auto-accept subsequent files
+        if (sessionAcceptedRef.current) {
+          activeRecvFile.current = { ...fileInfo, chunks: [], receivedBytes: 0 };
+          setReceiveProgress({ fileId: msg.id, name: msg.name, percent: 0, received: 0, total: msg.size });
+          const channel = dataChans.current.get(peerId);
+          if (channel && channel.readyState === 'open') {
+            channel.send(JSON.stringify({ type: 'file-accepted', id: msg.id }));
+          }
+        } else {
+          setIncomingFile(fileInfo);
+        }
         return;
       }
+
       if (msg.type === 'file-accepted') {
-        const file = pendingSend.current.get(peerId);
-        if (file) sendFileData(peerId, file);
+        const activeItem = activeSendFile.current;
+        if (activeItem && activeItem.id === msg.id) {
+          sendFileChunks(activeItem.peerId, activeItem.file, activeItem.id)
+            .catch(err => {
+              console.error('File chunking failed:', err);
+              sendQueueRef.current = sendQueueRef.current.filter(item => item.id !== msg.id);
+              processNextSendQueueItem();
+            });
+        }
         return;
       }
+
       if (msg.type === 'file-declined') {
-        pendingSend.current.delete(peerId);
+        sendQueueRef.current = [];
+        activeSendFile.current = null;
         setSendProgress(null);
         return;
       }
-      if (msg.type === 'file-meta') {
-        recvState.current.set(peerId, { chunks: [], size: 0, meta: msg });
-        setReceiveProgress({ percent: 0, received: 0, total: msg.size });
+
+      if (msg.type === 'file-ack') {
+        const activeItem = activeSendFile.current;
+        if (activeItem && activeItem.id === msg.id) {
+          sendQueueRef.current.shift();
+          if (sendQueueRef.current.length === 0) {
+            setSendProgress(prev => prev ? { ...prev, percent: 100, done: true } : null);
+            activeSendFile.current = null;
+          } else {
+            processNextSendQueueItem();
+          }
+        }
         return;
       }
       return;
     }
 
     // Binary chunk
-    const state = recvState.current.get(peerId);
+    const state = activeRecvFile.current;
     if (!state) return;
     state.chunks.push(e.data);
-    state.size += e.data.byteLength;
-    const total = state.meta.size;
-    const percent = Math.round((state.size / total) * 100);
-    setReceiveProgress({ percent, received: state.size, total });
+    state.receivedBytes += e.data.byteLength;
 
-    if (state.size >= total) {
-      const blob = new Blob(state.chunks, { type: state.meta.mime });
-      const url = URL.createObjectURL(blob);
+    const percent = Math.round((state.receivedBytes / state.size) * 100);
+    setReceiveProgress({
+      fileId: state.id,
+      name: state.name,
+      percent,
+      received: state.receivedBytes,
+      total: state.size,
+    });
+
+    if (state.receivedBytes >= state.size) {
+      const finalBlob = new Blob(state.chunks, { type: state.mimeType });
+      const url = URL.createObjectURL(finalBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = state.meta.name || 'download';
+      a.download = state.name;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setReceiveProgress({ percent: 100, received: total, total, done: true });
-      recvState.current.delete(peerId);
-      setTimeout(() => setReceiveProgress(null), 5000);
+
+      setReceiveProgress({
+        fileId: state.id,
+        name: state.name,
+        percent: 100,
+        received: state.size,
+        total: state.size,
+        done: true,
+      });
+
+      const channel = dataChans.current.get(peerId);
+      if (channel && channel.readyState === 'open') {
+        channel.send(JSON.stringify({ type: 'file-ack', id: state.id }));
+      }
+
+      activeRecvFile.current = null;
+      setTimeout(() => setReceiveProgress(null), 3000);
     }
-  }, [sendFileData]);
+  }, [sendFileChunks, processNextSendQueueItem]);
 
   /* ── Setup a DataChannel (created or received) */
   const setupDC = useCallback((peerId, channel) => {
@@ -231,13 +332,11 @@ export default function useWebRTC(onConnectionOpen) {
       } catch {
         // ignore
       }
-
     }
   }, []);
 
   /* ── Connect to a room pin via WebSocket ─────── */
   const connectToRoom = useCallback((pin) => {
-    // Disconnect existing socket first
     if (wsRef.current) {
       wsRef.current.close();
     }
@@ -253,7 +352,6 @@ export default function useWebRTC(onConnectionOpen) {
         const msg = JSON.parse(e.data);
 
         if (msg.type === 'peer-joined') {
-          // Initiate WebRTC connection if my ID is smaller
           if (myId < msg.id) {
             connectToPeer(msg.id);
           }
@@ -304,26 +402,39 @@ export default function useWebRTC(onConnectionOpen) {
     };
   }, [disconnectFromRoom]);
 
-  /* ── Send file API ──────────────────────────────── */
-  const sendFile = useCallback((peerId, file) => {
+  /* ── Send multiple files API ────────────────────── */
+  const sendFiles = useCallback((peerId, filesList) => {
     const channel = dataChans.current.get(peerId);
     if (!channel || channel.readyState !== 'open') return;
 
-    channel.send(JSON.stringify({
-      type: 'file-offer', name: file.name, size: file.size,
-      mime: file.type || 'application/octet-stream',
+    const newQueueItems = Array.from(filesList).map(file => ({
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15),
+      file,
+      peerId,
     }));
 
-    pendingSend.current.set(peerId, file);
-    activeSendPeer.current = peerId;
-    setSendProgress({ percent: 0, sent: 0, total: file.size, waiting: true });
-  }, []);
+    sendQueueRef.current = [...sendQueueRef.current, ...newQueueItems];
+
+    if (!activeSendFile.current) {
+      processNextSendQueueItem();
+    }
+  }, [processNextSendQueueItem]);
+
 
   const acceptIncomingFile = useCallback(() => {
     if (!incomingFile) return;
     const channel = dataChans.current.get(incomingFile.peerId);
     if (channel && channel.readyState === 'open') {
-      channel.send(JSON.stringify({ type: 'file-accepted' }));
+      sessionAcceptedRef.current = true; // Approve this multi-file session transfer
+      activeRecvFile.current = { ...incomingFile, chunks: [], receivedBytes: 0 };
+      setReceiveProgress({
+        fileId: incomingFile.id,
+        name: incomingFile.name,
+        percent: 0,
+        received: 0,
+        total: incomingFile.size
+      });
+      channel.send(JSON.stringify({ type: 'file-accepted', id: incomingFile.id }));
     }
     setIncomingFile(null);
   }, [incomingFile]);
@@ -332,9 +443,10 @@ export default function useWebRTC(onConnectionOpen) {
     if (!incomingFile) return;
     const channel = dataChans.current.get(incomingFile.peerId);
     if (channel && channel.readyState === 'open') {
-      channel.send(JSON.stringify({ type: 'file-declined' }));
+      channel.send(JSON.stringify({ type: 'file-declined', id: incomingFile.id }));
     }
     setIncomingFile(null);
+    sessionAcceptedRef.current = false;
   }, [incomingFile]);
 
   const hasPeers = peers.length > 0;
@@ -347,7 +459,7 @@ export default function useWebRTC(onConnectionOpen) {
     sendProgress,
     receiveProgress,
     incomingFile,
-    sendFile,
+    sendFiles,
     acceptIncomingFile,
     declineIncomingFile,
     setSendProgress,

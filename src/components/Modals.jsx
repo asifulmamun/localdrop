@@ -81,14 +81,16 @@ export function formatSize(bytes) {
 
 /* ── Send File Modal ────────────────────────── */
 export function SendFileModal({ peer, onClose, onSend, sendProgress }) {
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [dragover, setDragover] = useState(false);
   const fileInputRef = useRef(null);
 
   const handleDrop = (e) => {
     e.preventDefault();
     setDragover(false);
-    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files.length > 0) {
+      setFiles(Array.from(e.dataTransfer.files));
+    }
   };
 
   const sending = sendProgress && !sendProgress.done && !sendProgress.waiting;
@@ -100,9 +102,9 @@ export function SendFileModal({ peer, onClose, onSend, sendProgress }) {
       <div className="modal">
         <button className="modal-close" onClick={onClose}>{Icons.x}</button>
         <h2>Send to {peer.id}</h2>
-        <p className="subtitle">Select a file to send directly to this device.</p>
+        <p className="subtitle">Select files to send directly to this device.</p>
 
-        {!file && !sending && !done && (
+        {files.length === 0 && !sending && !done && (
           <div
             className={`drop-zone ${dragover ? 'dragover' : ''}`}
             onClick={() => fileInputRef.current?.click()}
@@ -111,39 +113,48 @@ export function SendFileModal({ peer, onClose, onSend, sendProgress }) {
             onDrop={handleDrop}
           >
             <div className="drop-zone-icon">📁</div>
-            <div className="drop-zone-text">Click or drag a file here</div>
+            <div className="drop-zone-text">Click or drag files here</div>
             <div className="drop-zone-hint">Any file type supported</div>
-            <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={(e) => e.target.files[0] && setFile(e.target.files[0])} />
+            <input
+              ref={fileInputRef}
+              id="file-input"
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => e.target.files.length > 0 && setFiles(Array.from(e.target.files))}
+            />
           </div>
         )}
 
-        {file && !sending && !done && (
+        {files.length > 0 && !sending && !done && (
           <>
-            <div className="file-selected">
-              <div className="file-selected-icon">📄</div>
-              <div className="file-selected-info">
-                <div className="file-selected-name">{file.name}</div>
-                <div className="file-selected-size">{formatSize(file.size)}</div>
-              </div>
-              <button className="file-selected-remove" onClick={() => setFile(null)}>{Icons.x}</button>
+            <div className="file-list-container" style={{ maxHeight: '180px', overflowY: 'auto', marginBottom: '16px' }}>
+              {files.map((file, i) => (
+                <div className="file-selected" key={i} style={{ marginBottom: i < files.length - 1 ? 8 : 0 }}>
+                  <div className="file-selected-icon">📄</div>
+                  <div className="file-selected-info">
+                    <div className="file-selected-name" style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '240px' }}>{file.name}</div>
+                    <div className="file-selected-size">{formatSize(file.size)}</div>
+                  </div>
+                  <button className="file-selected-remove" onClick={() => setFiles(prev => prev.filter((_, idx) => idx !== i))}>{Icons.x}</button>
+                </div>
+              ))}
             </div>
-            <button className="btn btn-primary" onClick={() => onSend(file)} disabled={waiting}>
-              {waiting ? 'Waiting for acceptance...' : <>{Icons.send} Send File</>}
+            <button className="btn btn-primary" onClick={() => onSend(files)} disabled={waiting}>
+              {waiting ? 'Waiting for acceptance...' : <>{Icons.send} Send {files.length} File{files.length !== 1 ? 's' : ''}</>}
             </button>
           </>
         )}
 
         {(sending || waiting) && sendProgress && (
-          <div className="progress-wrapper" style={{ marginTop: file ? 16 : 0 }}>
-            {file && (
-              <div className="file-selected" style={{ marginBottom: 16 }}>
-                <div className="file-selected-icon">📄</div>
-                <div className="file-selected-info">
-                  <div className="file-selected-name">{file.name}</div>
-                  <div className="file-selected-size">{formatSize(file.size)}</div>
-                </div>
+          <div className="progress-wrapper" style={{ marginTop: 0 }}>
+            <div className="file-selected" style={{ marginBottom: 16 }}>
+              <div className="file-selected-icon">📄</div>
+              <div className="file-selected-info">
+                <div className="file-selected-name">{sendProgress.name}</div>
+                <div className="file-selected-size">{formatSize(sendProgress.total)}</div>
               </div>
-            )}
+            </div>
             <div className="progress-header">
               <span>{waiting ? 'Waiting for peer...' : 'Sending...'}</span>
               <span>{sendProgress.percent}%</span>
@@ -157,8 +168,8 @@ export function SendFileModal({ peer, onClose, onSend, sendProgress }) {
         {done && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>File Sent Successfully</div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>The file has been delivered to {peer.id}</div>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Files Sent Successfully</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>All files have been delivered to {peer.id}</div>
             <button className="btn btn-secondary" style={{ marginTop: 20 }} onClick={onClose}>Done</button>
           </div>
         )}
