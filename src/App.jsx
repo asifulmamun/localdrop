@@ -3,7 +3,6 @@ import './App.css';
 import useWebRTC from './hooks/useWebRTC';
 import {
   Icons,
-  ConnectModal,
   SendFileModal,
   IncomingFileToast,
   ReceiveProgressToast,
@@ -11,15 +10,14 @@ import {
 
 export default function App() {
   const rtc = useWebRTC();
-  const [showConnect, setShowConnect] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState(null);
 
   const handlePeerClick = (peer) => {
-    if (rtc.isConnected) setSelectedPeer(peer);
+    setSelectedPeer(peer);
   };
 
   const handleSendFile = (file) => {
-    rtc.sendFile(file);
+    if (selectedPeer) rtc.sendFile(selectedPeer.id, file);
   };
 
   const peerCount = rtc.peers.length;
@@ -79,49 +77,17 @@ export default function App() {
 
       {/* ── Status Bar ─────────────────────── */}
       <div className="status-bar">
-        {rtc.isConnected ? (
+        {peerCount > 0 ? (
           <span>
-            {peerCount} peer{peerCount !== 1 ? 's' : ''} nearby —{' '}
-            <button className="link-btn" onClick={() => handlePeerClick(rtc.peers[0])}>
-              click to send
-            </button>
+            {peerCount} peer{peerCount !== 1 ? 's' : ''} nearby — click to send
           </span>
         ) : (
-          <span>
-            Waiting for peers —{' '}
-            <button className="link-btn" onClick={() => setShowConnect(true)}>
-              connect a device
-            </button>
-          </span>
+          <span>Looking for local peers…</span>
         )}
       </div>
 
-      {/* ── FAB ─────────────────────────────── */}
-      <button
-        className="connect-fab"
-        onClick={() => setShowConnect(true)}
-        title="Connect a device"
-      >
-        {Icons.plus}
-      </button>
-
       {/* ── Modals & Toasts ─────────────────── */}
-      {showConnect && (
-        <ConnectModal
-          onClose={() => setShowConnect(false)}
-          onCreateOffer={rtc.createOffer}
-          onAcceptOffer={rtc.acceptOffer}
-          onCompleteConnection={(ans) => {
-            rtc.completeConnection(ans);
-            setTimeout(() => setShowConnect(false), 1000);
-          }}
-          offerString={rtc.offerString}
-          answerString={rtc.answerString}
-          connectionState={rtc.connectionState}
-        />
-      )}
-
-      {selectedPeer && rtc.isConnected && (
+      {selectedPeer && (
         <SendFileModal
           peer={selectedPeer}
           onClose={() => {
