@@ -1,77 +1,84 @@
 import { WebSocketServer } from 'ws';
+import { URL } from 'url';
 
 /**
- * Vite plugin that embeds a tiny WebSocket signaling relay
- * directly into the existing dev server. No separate backend needed.
- * Only relays discovery + WebRTC offer/answer/ICE messages.
- * All file data flows purely P2P via WebRTC DataChannels.
+ * Vite plugin that embeds a room-based WebSocket signaling relay
+ * directly into the existing dev server. Relays connection requests
+ * based on the query parameter ?room=room-xxx&peerId=yyy.
  */
 export default function signalingPlugin() {
   return {
     name: 'localdrop-signaling',
     configureServer(server) {
       const wss = new WebSocketServer({ noServer: true });
-      const clients = new Map(); // id → ws
+      const rooms = new Map(); // roomName → Map(peerId → ws)
 
       server.httpServer.on('upgrade', (req, socket, head) => {
-        if (req.url === '/signaling') {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        if (url.pathname === '/signaling') {
           wss.handleUpgrade(req, socket, head, (ws) => {
             wss.emit('connection', ws, req);
           });
         }
       });
 
-      wss.on('connection', (ws) => {
-        let clientId = null;
+      wss.on('connection', (ws, req) => {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        const room = url.searchParams.get('room');
+        const peerId = url.searchParams.get('peerId');
+
+        if (!room || !peerId) {
+          ws.close(1008, 'Missing room or peerId query parameters');
+          return;
+        }
+
+        // Initialize room if not exists
+        if (!rooms.has(room)) {
+          rooms.set(room, new Map());
+        }
+        const roomClients = rooms.get(room);
+
+        // Store client
+        roomClients.set(peerId, ws);
+
+        // Notify other clients in the same room, and inform the new client about existing ones
+        for (const [otherId, otherWs] of roomClients) {
+          if (otherId !== peerId && otherWs.readyState === 1) {
+            otherWs.send(JSON.stringify({ type: 'peer-joined', id: peerId }));
+            ws.send(JSON.stringify({ type: 'peer-joined', id: otherId }));
+          }
+        }
 
         ws.on('message', (raw) => {
           try {
             const msg = JSON.parse(raw);
-
-            // Client registers with its unique ID
-            if (msg.type === 'register') {
-              clientId = msg.id;
-              clients.set(clientId, ws);
-              // Tell this client about all existing peers
-              for (const [id] of clients) {
-                if (id !== clientId) {
-                  ws.send(JSON.stringify({ type: 'peer-joined', id }));
-                }
-              }
-              // Announce this client to everyone else
-              for (const [id, c] of clients) {
-                if (id !== clientId && c.readyState === 1) {
-                  c.send(JSON.stringify({ type: 'peer-joined', id: clientId }));
-                }
-              }
-              return;
-            }
-
-            // Relay signaling messages (offer, answer, ice-candidate) to a specific peer
             if (msg.to) {
-              const target = clients.get(msg.to);
+              const target = roomClients.get(msg.to);
               if (target && target.readyState === 1) {
-                target.send(JSON.stringify({ ...msg, from: clientId }));
+                target.send(JSON.stringify({ ...msg, from: peerId }));
               }
             }
-          } catch (e) {
-            // ignore malformed messages
+          } catch {
+            // ignore
           }
+
         });
 
         ws.on('close', () => {
-          if (clientId) {
-            clients.delete(clientId);
-            for (const [, c] of clients) {
-              if (c.readyState === 1) {
-                c.send(JSON.stringify({ type: 'peer-left', id: clientId }));
+          roomClients.delete(peerId);
+          if (roomClients.size === 0) {
+            rooms.delete(room);
+          } else {
+            for (const [, otherWs] of roomClients) {
+              if (otherWs.readyState === 1) {
+                otherWs.send(JSON.stringify({ type: 'peer-left', id: peerId }));
               }
             }
           }
         });
       });
 
-      console.log('  ➜  LocalDrop signaling relay active on /signaling');
+      console.log('  ➜  Room-based signaling relay active on /signaling');
     },
   };
 }

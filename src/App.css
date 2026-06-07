@@ -422,3 +422,192 @@
   .status-bar { padding: 6px 16px; }
   .credit-footer { padding: 4px 16px 8px; }
 }
+
+/* ── Connect Device Modal & Tabs ────────────────── */
+.pairing-tabs {
+  display: flex;
+  border-bottom: 2px solid var(--border-light);
+  margin-bottom: 20px;
+}
+.tab-btn {
+  flex: 1;
+  padding: 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.tab-btn:hover {
+  color: var(--text);
+}
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.code-display-box {
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  word-break: break-all;
+  max-height: 90px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+}
+.qr-block-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 8px 0;
+}
+.qr-canvas-holder {
+  background: #fff;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-light);
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+}
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+.field-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.field-input, .field-textarea {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+}
+.field-input:focus, .field-textarea:focus {
+  border-color: var(--accent);
+}
+.field-textarea {
+  resize: none;
+  min-height: 80px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+.action-row {
+  display: flex;
+  gap: 8px;
+}
+.modal-error {
+  color: var(--red);
+  background: var(--red-light);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+}
+.success-msg {
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 600;
+}
+.scanner-viewport {
+  width: 100%;
+  aspect-ratio: 4/3;
+  max-height: 220px;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--border-light);
+}
+
+/* ── Radar Connect Button & Editable ID ──────────── */
+.btn-connect-radar {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px var(--accent-glow);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 20;
+}
+.btn-connect-radar:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px var(--accent-glow);
+  background: var(--accent);
+  opacity: 0.95;
+}
+.btn-connect-radar:active {
+  transform: scale(0.97);
+}
+.btn-connect-radar svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.5;
+}
+.editable-digits {
+  border-bottom: 1px dashed var(--text-dim);
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color 0.2s, border-color 0.2s;
+}
+.editable-digits:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.center-id-input {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 10px;
+  width: 90px;
+  text-align: center;
+  border-radius: 4px;
+  outline: none;
+  padding: 1px 4px;
+}
+
+.radar-sweep-loader {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3.5px solid var(--accent-light);
+  border-top-color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+

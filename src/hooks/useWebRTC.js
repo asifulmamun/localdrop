@@ -3,15 +3,20 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 const ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const CHUNK_SIZE = 16384; // 16KB
 
-function generateId() {
-  const adj = ['swift','calm','bold','fair','keen','warm','cool','fast','neat','wise'];
-  const noun = ['kite','wave','fern','leaf','star','moon','rain','hawk','pine','lake'];
-  const num = Math.floor(Math.random() * 999);
-  return `asif-${adj[Math.floor(Math.random()*adj.length)]}-${noun[Math.floor(Math.random()*noun.length)]}-${num}`;
-}
+export default function useWebRTC(onConnectionOpen) {
+  const [myId, setMyId] = useState(() => {
+    const saved = localStorage.getItem('filedrop_user_id');
+    if (saved) return saved;
+    const prefix = import.meta.env.VITE_APP_USER_ID_PREFIX || 'asif';
+    let digits = '';
+    for (let i = 0; i < 11; i++) {
+      digits += Math.floor(Math.random() * 10);
+    }
+    const newId = `${prefix}-${digits}`;
+    localStorage.setItem('filedrop_user_id', newId);
+    return newId;
+  });
 
-export default function useWebRTC() {
-  const [myId] = useState(() => generateId());
   const [peers, setPeers] = useState([]);
   const [sendProgress, setSendProgress] = useState(null);
   const [incomingFile, setIncomingFile] = useState(null);
@@ -25,7 +30,6 @@ export default function useWebRTC() {
   const pendingSend = useRef(new Map()); // peerId → File
   const activeSendPeer = useRef(null);
 
-  /* ── Helpers ──────────────────────────────── */
   const addPeerToRadar = useCallback((id) => {
     const angle = Math.random() * 2 * Math.PI;
     const radius = [90, 130, 155][Math.floor(Math.random() * 3)];
@@ -39,9 +43,56 @@ export default function useWebRTC() {
     setPeers(prev => prev.filter(p => p.id !== id));
   }, []);
 
-  const wsSend = useCallback((msg) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+  const cleanupPeer = useCallback((peerId) => {
+    const pc = peerConns.current.get(peerId);
+    if (pc) {
+      pc.close();
+      peerConns.current.delete(peerId);
+    }
+    dataChans.current.delete(peerId);
+    recvState.current.delete(peerId);
+    pendingSend.current.delete(peerId);
+    removePeerFromRadar(peerId);
+  }, [removePeerFromRadar]);
+
+  /* ── Send file binary data over DataChannel ── */
+  const sendFileData = useCallback((peerId, file) => {
+    const channel = dataChans.current.get(peerId);
+    if (!channel || channel.readyState !== 'open') return;
+
+    channel.send(JSON.stringify({
+      type: 'file-meta', name: file.name, size: file.size,
+      mime: file.type || 'application/octet-stream',
+    }));
+
+    let offset = 0;
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      channel.send(e.target.result);
+      offset += e.target.result.byteLength;
+      const percent = Math.round((offset / file.size) * 100);
+      setSendProgress({ percent, sent: offset, total: file.size });
+
+      if (offset < file.size) {
+        if (channel.bufferedAmount > CHUNK_SIZE * 8) {
+          setTimeout(readSlice, 50);
+        } else {
+          readSlice();
+        }
+      } else {
+        setSendProgress({ percent: 100, sent: file.size, total: file.size, done: true });
+        pendingSend.current.delete(peerId);
+      }
+    };
+
+    const readSlice = () => {
+      const slice = file.slice(offset, offset + CHUNK_SIZE);
+      reader.readAsArrayBuffer(slice);
+    };
+
+    setSendProgress({ percent: 0, sent: 0, total: file.size });
+    readSlice();
   }, []);
 
   /* ── Data Channel message handler ─────────── */
@@ -92,67 +143,29 @@ export default function useWebRTC() {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
       setReceiveProgress({ percent: 100, received: total, total, done: true });
       recvState.current.delete(peerId);
-      // Auto-clear the done toast after 5s
       setTimeout(() => setReceiveProgress(null), 5000);
     }
-  }, []);
-
-  /* ── Send file binary data over DataChannel ── */
-  const sendFileData = useCallback((peerId, file) => {
-    const channel = dataChans.current.get(peerId);
-    if (!channel || channel.readyState !== 'open') return;
-
-    channel.send(JSON.stringify({
-      type: 'file-meta', name: file.name, size: file.size,
-      mime: file.type || 'application/octet-stream',
-    }));
-
-    let offset = 0;
-    const reader = new FileReader();
-
-    reader.onload = (e) => {
-      channel.send(e.target.result);
-      offset += e.target.result.byteLength;
-      const percent = Math.round((offset / file.size) * 100);
-      setSendProgress({ percent, sent: offset, total: file.size });
-
-      if (offset < file.size) {
-        if (channel.bufferedAmount > CHUNK_SIZE * 8) {
-          setTimeout(readSlice, 50);
-        } else {
-          readSlice();
-        }
-      } else {
-        setSendProgress({ percent: 100, sent: file.size, total: file.size, done: true });
-        pendingSend.current.delete(peerId);
-      }
-    };
-
-    const readSlice = () => {
-      const slice = file.slice(offset, offset + CHUNK_SIZE);
-      reader.readAsArrayBuffer(slice);
-    };
-
-    setSendProgress({ percent: 0, sent: 0, total: file.size });
-    readSlice();
-  }, []);
+  }, [sendFileData]);
 
   /* ── Setup a DataChannel (created or received) */
   const setupDC = useCallback((peerId, channel) => {
     channel.binaryType = 'arraybuffer';
     dataChans.current.set(peerId, channel);
 
-    channel.onopen = () => addPeerToRadar(peerId);
+    channel.onopen = () => {
+      addPeerToRadar(peerId);
+      if (onConnectionOpen) onConnectionOpen(peerId);
+    };
     channel.onclose = () => {
       dataChans.current.delete(peerId);
       removePeerFromRadar(peerId);
     };
     channel.onmessage = (e) => handleDCMessage(peerId, e);
-  }, [addPeerToRadar, removePeerFromRadar, handleDCMessage]);
+  }, [addPeerToRadar, removePeerFromRadar, handleDCMessage, onConnectionOpen]);
 
   /* ── Create a WebRTC connection TO a peer (we are the offerer) */
   const connectToPeer = useCallback((peerId) => {
-    if (peerConns.current.has(peerId)) return; // already connecting/connected
+    if (peerConns.current.has(peerId)) return;
 
     const pc = new RTCPeerConnection(ICE_CONFIG);
     peerConns.current.set(peerId, pc);
@@ -161,20 +174,21 @@ export default function useWebRTC() {
     setupDC(peerId, dc);
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        wsSend({ type: 'ice-candidate', to: peerId, candidate: e.candidate });
+      if (e.candidate && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ice-candidate', to: peerId, candidate: e.candidate }));
       }
     };
 
-    pc.createOffer().then(offer => {
-      pc.setLocalDescription(offer);
-      wsSend({ type: 'offer', to: peerId, sdp: offer });
+    pc.createOffer().then(async (offer) => {
+      await pc.setLocalDescription(offer);
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'offer', to: peerId, sdp: offer }));
+      }
     });
-  }, [setupDC, wsSend]);
+  }, [setupDC]);
 
   /* ── Handle incoming offer FROM a peer ─────── */
   const handleOffer = useCallback(async (fromId, sdp) => {
-    // If we already have a connection, clean it up first
     if (peerConns.current.has(fromId)) {
       peerConns.current.get(fromId).close();
       peerConns.current.delete(fromId);
@@ -186,108 +200,111 @@ export default function useWebRTC() {
     pc.ondatachannel = (e) => setupDC(fromId, e.channel);
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        wsSend({ type: 'ice-candidate', to: fromId, candidate: e.candidate });
+      if (e.candidate && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ice-candidate', to: fromId, candidate: e.candidate }));
       }
     };
 
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    wsSend({ type: 'answer', to: fromId, sdp: answer });
-  }, [setupDC, wsSend]);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'answer', to: fromId, sdp: answer }));
+    }
+  }, [setupDC]);
 
   /* ── Handle incoming answer ────────────────── */
   const handleAnswer = useCallback(async (fromId, sdp) => {
     const pc = peerConns.current.get(fromId);
-    if (pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    if (pc) {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    }
   }, []);
 
   /* ── Handle ICE candidate ──────────────────── */
   const handleICE = useCallback(async (fromId, candidate) => {
     const pc = peerConns.current.get(fromId);
     if (pc) {
-      try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e) {}
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch {
+        // ignore
+      }
+
     }
   }, []);
 
-  /* ── Cleanup a peer fully ──────────────────── */
-  const cleanupPeer = useCallback((peerId) => {
-    const pc = peerConns.current.get(peerId);
-    if (pc) { pc.close(); peerConns.current.delete(peerId); }
-    dataChans.current.delete(peerId);
-    recvState.current.delete(peerId);
-    pendingSend.current.delete(peerId);
-    removePeerFromRadar(peerId);
-  }, [removePeerFromRadar]);
+  /* ── Connect to a room pin via WebSocket ─────── */
+  const connectToRoom = useCallback((pin) => {
+    // Disconnect existing socket first
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
 
-  /* ── WebSocket connection to signaling relay ── */
-  useEffect(() => {
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${proto}://${window.location.host}/signaling`;
-    let ws;
-    let reconnectTimer;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/signaling?room=room-${pin}&peerId=${myId}`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
 
-    const connect = () => {
-      ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
 
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'register', id: myId }));
-      };
-
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-
-          if (msg.type === 'peer-joined') {
-            // We initiate the WebRTC connection to the new peer
-            // Use lexicographic comparison to decide who offers (avoids double-offer)
-            if (myId < msg.id) {
-              connectToPeer(msg.id);
-            }
-            // If myId > msg.id, the other peer will send us an offer
+        if (msg.type === 'peer-joined') {
+          // Initiate WebRTC connection if my ID is smaller
+          if (myId < msg.id) {
+            connectToPeer(msg.id);
           }
-
-          if (msg.type === 'peer-left') {
-            cleanupPeer(msg.id);
-          }
-
-          if (msg.type === 'offer') {
-            handleOffer(msg.from, msg.sdp);
-          }
-
-          if (msg.type === 'answer') {
-            handleAnswer(msg.from, msg.sdp);
-          }
-
-          if (msg.type === 'ice-candidate') {
-            handleICE(msg.from, msg.candidate);
-          }
-        } catch (err) {
-          // ignore
         }
-      };
 
-      ws.onclose = () => {
-        // Auto-reconnect after 2s
-        reconnectTimer = setTimeout(connect, 2000);
-      };
+        if (msg.type === 'peer-left') {
+          cleanupPeer(msg.id);
+        }
+
+        if (msg.type === 'offer') {
+          handleOffer(msg.from, msg.sdp);
+        }
+
+        if (msg.type === 'answer') {
+          handleAnswer(msg.from, msg.sdp);
+        }
+
+        if (msg.type === 'ice-candidate') {
+          handleICE(msg.from, msg.candidate);
+        }
+      } catch (err) {
+        console.error('WebSocket message parsing error:', err);
+      }
     };
 
-    connect();
+    ws.onclose = () => {
+      wsRef.current = null;
+    };
+  }, [myId, connectToPeer, cleanupPeer, handleOffer, handleAnswer, handleICE]);
 
+  /* ── Disconnect from room WebSocket ──────────── */
+  const disconnectFromRoom = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  }, []);
+
+  /* ── Cleanup on unmount ─────────────────────────── */
+  useEffect(() => {
+    const conns = peerConns.current;
+    const chans = dataChans.current;
     return () => {
-      clearTimeout(reconnectTimer);
-      if (ws) ws.close();
-      // Cleanup all peer connections
-      for (const [, pc] of peerConns.current) pc.close();
-      peerConns.current.clear();
-      dataChans.current.clear();
+      disconnectFromRoom();
+      for (const [, pc] of conns) pc.close();
+      conns.clear();
+      chans.clear();
     };
-  }, [myId, connectToPeer, handleOffer, handleAnswer, handleICE, cleanupPeer]);
+  }, [disconnectFromRoom]);
 
-  /* ── Public API ───────────────────────────── */
+  /* ── Send file API ──────────────────────────────── */
   const sendFile = useCallback((peerId, file) => {
     const channel = dataChans.current.get(peerId);
     if (!channel || channel.readyState !== 'open') return;
@@ -324,6 +341,7 @@ export default function useWebRTC() {
 
   return {
     myId,
+    setMyId,
     peers,
     hasPeers,
     sendProgress,
@@ -334,5 +352,7 @@ export default function useWebRTC() {
     declineIncomingFile,
     setSendProgress,
     setReceiveProgress,
+    connectToRoom,
+    disconnectFromRoom,
   };
 }

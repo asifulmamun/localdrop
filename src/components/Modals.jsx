@@ -1,4 +1,9 @@
-import { useState, useRef } from 'react';
+/* eslint-disable react-refresh/only-export-components */
+import { useState, useRef, useEffect } from 'react';
+import QRCode from 'qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
+
+
 
 /* ── SVG Icons ──────────────────────────────── */
 export const Icons = {
@@ -207,3 +212,204 @@ export function ReceiveProgressToast({ progress }) {
     </div>
   );
 }
+
+/* ── Connect Device Modal ───────────────────── */
+export function ConnectDeviceModal({ rtc, onClose }) {
+
+  const [pin, setPin] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [error, setError] = useState('');
+  const qrCanvasRef = useRef(null);
+
+  const generateRandomCode = () => {
+    setError('');
+    const code = Math.floor(1000 + Math.random() * 9000).toString();
+    setPin(code);
+  };
+
+  const handleConnect = (codeToUse) => {
+    const finalCode = codeToUse || pin;
+    if (!finalCode || finalCode.length < 4 || finalCode.length > 6) {
+      setError('Please enter a valid 4 to 6-digit code.');
+      return;
+    }
+    setError('');
+    setIsConnecting(true);
+    rtc.connectToRoom(finalCode);
+  };
+
+  const handleCancelConnection = () => {
+    setIsConnecting(false);
+    rtc.disconnectFromRoom();
+  };
+
+  // Generate QR Code dynamically
+  useEffect(() => {
+    if (pin && pin.length >= 4 && pin.length <= 6 && qrCanvasRef.current) {
+      QRCode.toCanvas(
+        qrCanvasRef.current,
+        pin,
+        {
+          width: 150,
+          margin: 2,
+          color: {
+            dark: '#1d1d1f',
+            light: '#ffffff',
+          },
+        },
+        (err) => {
+          if (err) console.error('Failed to draw QR code:', err);
+        }
+      );
+    }
+  }, [pin]);
+
+  // Scanner logic
+  useEffect(() => {
+    let scanner = null;
+    if (isScanning) {
+      const checkEl = setInterval(() => {
+        const el = document.getElementById('qr-reader');
+        if (el) {
+          clearInterval(checkEl);
+          scanner = new Html5Qrcode('qr-reader');
+          scanner.start(
+            { facingMode: 'environment' },
+            {
+              fps: 10,
+              qrbox: { width: 150, height: 150 }
+            },
+            async (decodedText) => {
+              setIsScanning(false);
+              try {
+                await scanner.stop();
+              } catch (e) {
+                console.error('Failed to stop scanner:', e);
+              }
+              const cleaned = decodedText.trim().replace(/\D/g, '');
+              if (cleaned.length >= 4 && cleaned.length <= 6) {
+                setPin(cleaned);
+                handleConnect(cleaned);
+              } else {
+                setError('Scanned code is not a valid 4 to 6-digit code.');
+              }
+            },
+            () => {
+              // silent failure
+            }
+          ).catch((err) => {
+            console.error('Camera capture start failed:', err);
+            setError('Camera permission denied or camera not found.');
+            setIsScanning(false);
+          });
+        }
+      }, 50);
+
+      return () => {
+        clearInterval(checkEl);
+        if (scanner) {
+          if (scanner.isScanning) {
+            scanner.stop().catch(err => console.error('Cleanup stop failed:', err));
+          }
+        }
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isScanning]);
+
+  const handleClose = () => {
+    rtc.disconnectFromRoom();
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>
+      <div className="modal" style={{ maxWidth: '400px' }}>
+        <button className="modal-close" onClick={handleClose}>{Icons.x}</button>
+        <h2>Connect Device</h2>
+        <p className="subtitle">Enter a 4-6 digit Room Code or scan the QR code to connect devices.</p>
+
+        {isConnecting ? (
+          <div style={{ textAlign: 'center', padding: '24px 0' }}>
+            <div className="radar-sweep-loader" style={{ margin: '0 auto 16px' }} />
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Connecting to Room {pin}</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+              Waiting for another device to enter the same code...
+            </div>
+            <button className="btn btn-secondary" onClick={handleCancelConnection}>Cancel</button>
+          </div>
+        ) : isScanning ? (
+          <div className="tab-content">
+            <div className="field-group">
+              <label>Scan Room QR Code</label>
+              <div id="qr-reader" className="scanner-viewport" />
+              <button className="btn btn-secondary" onClick={() => setIsScanning(false)}>Cancel Scan</button>
+            </div>
+          </div>
+        ) : (
+          <div className="tab-content">
+            <div className="field-group">
+              <label htmlFor="room-pin-input">Room Code (4-6 digits)</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  id="room-pin-input"
+                  type="text"
+                  pattern="\d*"
+                  maxLength={6}
+                  className="field-input"
+                  placeholder="Enter 4-6 digit code"
+                  value={pin}
+                  onChange={(e) => {
+                    setError('');
+                    setPin(e.target.value.replace(/\D/g, ''));
+                  }}
+                />
+                <button
+                  className="btn btn-secondary"
+                  style={{ width: 'auto', whiteSpace: 'nowrap', flexShrink: 0 }}
+                  onClick={generateRandomCode}
+                >
+                  Generate
+                </button>
+              </div>
+            </div>
+
+            {pin && pin.length >= 4 && pin.length <= 6 && (
+              <div className="qr-block-wrapper">
+                <div className="qr-canvas-holder">
+                  <canvas ref={qrCanvasRef} />
+                </div>
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>
+                  Scan this QR code from another device to sync
+                </span>
+              </div>
+            )}
+
+            {error && <div className="modal-error">{error}</div>}
+
+            <div className="action-row" style={{ marginTop: 8 }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setIsScanning(true)}
+                style={{ flex: 1 }}
+              >
+                📷 Scan Code
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => handleConnect()}
+                disabled={pin.length < 4}
+                style={{ flex: 1.5 }}
+              >
+                Connect
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+

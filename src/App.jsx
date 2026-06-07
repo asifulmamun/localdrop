@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import './App.css';
 import useWebRTC from './hooks/useWebRTC';
 import {
@@ -6,30 +6,48 @@ import {
   SendFileModal,
   IncomingFileToast,
   ReceiveProgressToast,
+  ConnectDeviceModal,
 } from './components/Modals';
 
 export default function App() {
-  const rtc = useWebRTC();
+  const [isConnectOpen, setIsConnectOpen] = useState(false);
+  const rtc = useWebRTC(() => {
+    setIsConnectOpen(false);
+  });
   const [selectedPeer, setSelectedPeer] = useState(null);
   const [dark, setDark] = useState(() => {
-    const saved = localStorage.getItem('filedrop-theme');
+    const saved = localStorage.getItem('localdrop-theme');
     if (saved) return saved === 'dark';
     return false; // default light
   });
 
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+
+  const parts = rtc.myId.split('-');
+  const prefix = parts[0] || 'asif';
+  const initialDigits = parts.slice(1).join('-');
+
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-    localStorage.setItem('filedrop-theme', dark ? 'dark' : 'light');
+    localStorage.setItem('localdrop-theme', dark ? 'dark' : 'light');
   }, [dark]);
 
   const handleSendFile = (file) => {
     if (selectedPeer) rtc.sendFile(selectedPeer.id, file);
   };
 
-  const peerCount = rtc.peers.length;
+  const handleSaveId = () => {
+    setIsEditing(false);
+    const cleaned = editValue.replace(/\D/g, '');
+    if (cleaned.length > 0) {
+      const newId = `${prefix}-${cleaned}`;
+      rtc.setMyId(newId);
+      localStorage.setItem('filedrop_user_id', newId);
+    }
+  };
 
-  // Compute radar size based on nothing — CSS handles it via vmin
-  // Peer positions use percentage-based placement
+  const peerCount = rtc.peers.length;
   const radarSize = 420; // reference size, CSS scales it
 
   return (
@@ -38,7 +56,7 @@ export default function App() {
       <nav className="navbar">
         <div className="navbar-brand">
           {Icons.logo}
-          <span>FileDrop</span>
+          <span>LocalDrop</span>
         </div>
         <button
           className="theme-toggle"
@@ -67,7 +85,32 @@ export default function App() {
               {Icons.user}
             </div>
             <span className="center-label">You</span>
-            <span className="center-id">{rtc.myId}</span>
+            <span className="center-id" style={{ cursor: isEditing ? 'default' : 'pointer' }}>
+              {isEditing ? (
+                <input
+                  type="text"
+                  className="center-id-input"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value.replace(/\D/g, ''))}
+                  onBlur={handleSaveId}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveId()}
+                  autoFocus
+                />
+              ) : (
+                <span
+                  title="Click to edit 11-digit number"
+                  onClick={() => {
+                    setEditValue(initialDigits);
+                    setIsEditing(true);
+                  }}
+                >
+                  {prefix}-<span className="editable-digits">{initialDigits}</span>
+                </span>
+              )}
+            </span>
+            <button className="btn-connect-radar" onClick={() => setIsConnectOpen(true)}>
+              {Icons.plus} Connect Device
+            </button>
           </div>
 
           {/* Peer nodes on radar */}
@@ -103,9 +146,8 @@ export default function App() {
 
       {/* ── Credit Footer ──────────────────── */}
       <footer className="credit-footer">
-        Built by{' '}
         <a href="https://asifulmamun.info.bd" target="_blank" rel="noopener noreferrer">
-          asifulmamun.info.bd
+          Latest: asifulmamun.info.bd
         </a>
       </footer>
 
@@ -116,6 +158,13 @@ export default function App() {
           onClose={() => { setSelectedPeer(null); rtc.setSendProgress(null); }}
           onSend={handleSendFile}
           sendProgress={rtc.sendProgress}
+        />
+      )}
+
+      {isConnectOpen && (
+        <ConnectDeviceModal
+          rtc={rtc}
+          onClose={() => setIsConnectOpen(false)}
         />
       )}
 
