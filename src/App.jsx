@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import './App.css';
 import useWebRTC from './hooks/useWebRTC';
 import {
@@ -11,10 +11,16 @@ import {
 export default function App() {
   const rtc = useWebRTC();
   const [selectedPeer, setSelectedPeer] = useState(null);
+  const [dark, setDark] = useState(() => {
+    const saved = localStorage.getItem('filedrop-theme');
+    if (saved) return saved === 'dark';
+    return false; // default light
+  });
 
-  const handlePeerClick = (peer) => {
-    setSelectedPeer(peer);
-  };
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    localStorage.setItem('filedrop-theme', dark ? 'dark' : 'light');
+  }, [dark]);
 
   const handleSendFile = (file) => {
     if (selectedPeer) rtc.sendFile(selectedPeer.id, file);
@@ -22,18 +28,26 @@ export default function App() {
 
   const peerCount = rtc.peers.length;
 
+  // Compute radar size based on nothing — CSS handles it via vmin
+  // Peer positions use percentage-based placement
+  const radarSize = 420; // reference size, CSS scales it
+
   return (
     <>
       {/* ── Navbar ─────────────────────────── */}
       <nav className="navbar">
         <div className="navbar-brand">
           {Icons.logo}
-          <span>LocalDrop</span>
+          <span>FileDrop</span>
         </div>
-        <div className="navbar-right">
-          <span>Your ID</span>
-          <span className="navbar-id">{rtc.myId}</span>
-        </div>
+        <button
+          className="theme-toggle"
+          onClick={() => setDark(d => !d)}
+          title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label="Toggle theme"
+        >
+          {dark ? Icons.sun : Icons.moon}
+        </button>
       </nav>
 
       {/* ── Radar Area ─────────────────────── */}
@@ -42,30 +56,33 @@ export default function App() {
           <div className="radar-ring radar-ring-1" />
           <div className="radar-ring radar-ring-2" />
           <div className="radar-ring radar-ring-3" />
-          <div className="radar-ring radar-ring-4" />
+          {/* Radar sweep wave */}
+          <div className="radar-sweep" />
 
           {/* Center "You" node */}
           <div className="center-node">
             <div className="center-avatar">
               <div className="pulse" />
               <div className="pulse" />
-              <div className="pulse" />
               {Icons.user}
             </div>
             <span className="center-label">You</span>
+            <span className="center-id">{rtc.myId}</span>
           </div>
 
           {/* Peer nodes on radar */}
           {rtc.peers.map((peer) => {
-            const x = 210 + Math.cos(peer.angle) * peer.radius;
-            const y = 210 + Math.sin(peer.angle) * peer.radius;
+            const cx = radarSize / 2;
+            const cy = radarSize / 2;
+            const x = cx + Math.cos(peer.angle) * peer.radius;
+            const y = cy + Math.sin(peer.angle) * peer.radius;
             return (
               <div
                 key={peer.id}
                 className="peer-node"
-                style={{ left: x, top: y }}
-                onClick={() => handlePeerClick(peer)}
-                title={`Click to send file to ${peer.id}`}
+                style={{ left: `${(x / radarSize) * 100}%`, top: `${(y / radarSize) * 100}%` }}
+                onClick={() => setSelectedPeer(peer)}
+                title={`Send file to ${peer.id}`}
               >
                 <div className="peer-avatar">{Icons.device}</div>
                 <span className="peer-name">{peer.id}</span>
@@ -78,9 +95,7 @@ export default function App() {
       {/* ── Status Bar ─────────────────────── */}
       <div className="status-bar">
         {peerCount > 0 ? (
-          <span>
-            {peerCount} peer{peerCount !== 1 ? 's' : ''} nearby — click to send
-          </span>
+          <span>{peerCount} peer{peerCount !== 1 ? 's' : ''} nearby — click to send</span>
         ) : (
           <span className="scanning">Looking for local peers…</span>
         )}
@@ -88,17 +103,17 @@ export default function App() {
 
       {/* ── Credit Footer ──────────────────── */}
       <footer className="credit-footer">
-        Built by <a href="https://asifulmamun.info.bd" target="_blank" rel="noopener noreferrer">asifulmamun.info.bd</a>
+        Built by{' '}
+        <a href="https://asifulmamun.info.bd" target="_blank" rel="noopener noreferrer">
+          asifulmamun.info.bd
+        </a>
       </footer>
 
       {/* ── Modals & Toasts ─────────────────── */}
       {selectedPeer && (
         <SendFileModal
           peer={selectedPeer}
-          onClose={() => {
-            setSelectedPeer(null);
-            rtc.setSendProgress(null);
-          }}
+          onClose={() => { setSelectedPeer(null); rtc.setSendProgress(null); }}
           onSend={handleSendFile}
           sendProgress={rtc.sendProgress}
         />

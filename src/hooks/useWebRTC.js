@@ -7,7 +7,7 @@ function generateId() {
   const adj = ['swift','calm','bold','fair','keen','warm','cool','fast','neat','wise'];
   const noun = ['kite','wave','fern','leaf','star','moon','rain','hawk','pine','lake'];
   const num = Math.floor(Math.random() * 999);
-  return `${adj[Math.floor(Math.random()*adj.length)]}-${noun[Math.floor(Math.random()*noun.length)]}-${num}`;
+  return `asif-${adj[Math.floor(Math.random()*adj.length)]}-${noun[Math.floor(Math.random()*noun.length)]}-${num}`;
 }
 
 export default function useWebRTC() {
