@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "host": "vite --host 192.168.20.150"
+    "host": "vite --host 192.168.20.150",
+    "start": "node signaling-server.js"
   },
   "dependencies": {
     "html5-qrcode": "^2.3.8",

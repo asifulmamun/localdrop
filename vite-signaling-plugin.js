@@ -15,7 +15,7 @@ export default function signalingPlugin() {
 
       server.httpServer.on('upgrade', (req, socket, head) => {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-        if (url.pathname === '/signaling') {
+        if (url.pathname.endsWith('/signaling')) {
           wss.handleUpgrade(req, socket, head, (ws) => {
             wss.emit('connection', ws, req);
           });

@@ -343,7 +343,12 @@ export default function useWebRTC(onConnectionOpen) {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/signaling?room=room-${pin}&peerId=${myId}`;
+    const path = window.location.pathname;
+    const dir = path.substring(0, path.lastIndexOf('/') + 1);
+    
+    let baseWsUrl = import.meta.env.VITE_WS_SERVER_URL || `${protocol}//${host}${dir}signaling`;
+    const connector = baseWsUrl.includes('?') ? '&' : '?';
+    const wsUrl = `${baseWsUrl}${connector}room=room-${pin}&peerId=${myId}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
