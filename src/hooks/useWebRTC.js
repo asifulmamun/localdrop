@@ -346,7 +346,14 @@ export default function useWebRTC(onConnectionOpen) {
     const path = window.location.pathname;
     const dir = path.substring(0, path.lastIndexOf('/') + 1);
     
-    let baseWsUrl = import.meta.env.VITE_WS_SERVER_URL || `${protocol}//${host}${dir}signaling`;
+    let defaultWsUrl;
+    if (import.meta.env.MODE === 'production') {
+      defaultWsUrl = 'wss://filedrop-signaling.asiful.workers.dev/signal';
+    } else {
+      defaultWsUrl = `${protocol}//${host}${dir}signaling`;
+    }
+
+    let baseWsUrl = import.meta.env.VITE_WS_SERVER_URL || defaultWsUrl;
     const connector = baseWsUrl.includes('?') ? '&' : '?';
     const wsUrl = `${baseWsUrl}${connector}room=room-${pin}&peerId=${myId}`;
     const ws = new WebSocket(wsUrl);
